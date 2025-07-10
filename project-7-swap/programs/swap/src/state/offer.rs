@@ -8,5 +8,5 @@ pub struct Offer {
     pub token_mint_a: Pubkey,
     pub token_mint_b: Pubkey,
     pub token_b_wanted_amount: u64,
-    pub bump: u8,
+    pub bump: u8, // why in this struct ?
 }

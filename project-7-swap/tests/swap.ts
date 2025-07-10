@@ -1,6 +1,15 @@
 import { randomBytes } from "node:crypto";
 import * as anchor from "@coral-xyz/anchor";
+/*
 import { BN, type Program } from "@coral-xyz/anchor";
+SyntaxError: Named export 'BN' not found. The requested module '@coral-xyz/anchor' is a CommonJS module, which may not support all module.exports as named exports.
+CommonJS modules can always be imported via the default export, for example using:
+
+import pkg from '@coral-xyz/anchor';
+const { BN,              } = pkg;
+*/
+import anchor2 from "@coral-xyz/anchor";
+const { BN, Program } = anchor2;
 import {
   TOKEN_2022_PROGRAM_ID,
   type TOKEN_PROGRAM_ID,
@@ -41,6 +50,7 @@ describe("swap", async () => {
   const payer = user;
 
   const connection = provider.connection;
+  console.log(`connection:${connection.rpcEndpoint}`);
 
   const program = anchor.workspace.Swap as Program<Swap>;
 
@@ -53,6 +63,7 @@ describe("swap", async () => {
   let bob: anchor.web3.Keypair;
   let tokenMintA: anchor.web3.Keypair;
   let tokenMintB: anchor.web3.Keypair;
+  let vault;
 
   [alice, bob, tokenMintA, tokenMintB] = makeKeypairs(4);
 
@@ -101,6 +112,13 @@ describe("swap", async () => {
       const bobTokenAccountA = tokenAccounts[1][0];
       const bobTokenAccountB = tokenAccounts[1][1];
 
+      // 动态地往 accounts 这个对象里添加新字段
+      // 这样写可以动态组装所有需要传给 Anchor 方法的账户对象。
+      // 最终在调用 .accounts({ ...accounts }) 时，Anchor 会自动把这些字段映射到 Rust 端的账户参数
+
+      // 如果大小写写错了，如写成tokenMinta，则rpc时会报：Error: Account `tokenMintA` not provided.
+      // If we purposely omit some account field such as `tokenMintB`, rpc will report error
+      //    Error: Account `tokenMintB` not provided.
       // Save the accounts for later use
       accounts.maker = alice.publicKey;
       accounts.taker = bob.publicKey;
@@ -110,6 +128,7 @@ describe("swap", async () => {
       accounts.tokenMintB = tokenMintB.publicKey;
       accounts.makerTokenAccountB = aliceTokenAccountB;
       accounts.takerTokenAccountB = bobTokenAccountB;
+      console.log(`[before] after accounts assignment: ${accounts}`);
     }
   );
 
@@ -117,6 +136,7 @@ describe("swap", async () => {
     // Pick a random ID for the offer we'll make
     const offerId = getRandomBigNumber();
 
+    // “用 seeds + programId 计算出属于这个 program 的某个 PDA 地址”
     // Then determine the account addresses we'll use for the offer and the vault
     const offer = PublicKey.findProgramAddressSync(
       [
@@ -127,7 +147,7 @@ describe("swap", async () => {
       program.programId
     )[0];
 
-    const vault = getAssociatedTokenAddressSync(
+    vault = getAssociatedTokenAddressSync(
       accounts.tokenMintA,
       offer,
       true,
@@ -185,5 +205,16 @@ describe("swap", async () => {
       aliceTokenAccountBalanceAfterResponse.value.amount
     );
     assert(aliceTokenAccountBalanceAfter.eq(tokenBWantedAmount));
+
+    // 检查vault账户是否被关闭
+    let vaultAccountInfo = null;
+    try {
+      vaultAccountInfo = await connection.getAccountInfo(vault);
+    } catch (e) {
+      // ignore exception
+    }
+    assert(!vaultAccountInfo,
+      "Vault account should be closed after takeOffer"
+    );
   }).slow(ANCHOR_SLOW_TEST_THRESHOLD);
 });
