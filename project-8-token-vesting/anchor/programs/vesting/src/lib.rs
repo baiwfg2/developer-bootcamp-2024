@@ -87,6 +87,7 @@ pub mod vesting {
             signer_seeds
         );
         let decimals = ctx.accounts.mint.decimals;
+        // claimable_amount is i64
         token_interface::transfer_checked(cpi_context, claimable_amount as u64, decimals)?;
         employee_account.total_withdrawn += claimable_amount;
         Ok(())
@@ -115,6 +116,11 @@ pub struct CreateVestingAccount<'info> {
         seeds = [b"vesting_treasury", company_name.as_bytes()],
         bump
     )]
+    // treasury_token_account 是公司金库的 TokenAccount，它是由合约（PDA）控制的，
+    //  不是某个用户钱包的“关联账户”
+    // 是程序自定义的账户，而不是 SPL Token Associated Token Program 自动推导出来的账户。
+    // 金库账户不是“某个用户的钱包+mint”的标准组合，而是“公司+mint”的唯一账户，由合约自己管理,
+    //   所以它不能用 associated_token::xxx 这样的约束
     pub treasury_token_account: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
@@ -124,7 +130,7 @@ pub struct CreateVestingAccount<'info> {
 pub struct CreateEmployeeAccount<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
-    pub beneficiary: SystemAccount<'info>,
+    pub beneficiary: SystemAccount<'info>, //why SystemAccount
     #[account(has_one = owner)]
     pub vesting_account: Account<'info, VestingAccount>,
     #[account(
@@ -147,6 +153,8 @@ pub struct ClaimTokens<'info> {
         mut,
         seeds = [b"employee_vesting", beneficiary.key().as_ref(), vesting_account.key().as_ref()],
         bump = employee_account.bump,
+        // 如果随便换名，则报：no field `beneficiary2` on type `anchor_lang::prelude::Account<'_, EmployeeAccount>`
+        // 这样可以防止恶意用户伪造账户，确保账户之间的归属关系正确
         has_one = beneficiary,
         has_one = vesting_account
     )]
@@ -158,9 +166,12 @@ pub struct ClaimTokens<'info> {
         has_one = treasury_token_account,
         has_one = mint
     )]
+    // 公司级别的 vesting 账户，记录公司、mint、金库等信息
     pub vesting_account: Account<'info, VestingAccount>,
+    // 代币的 mint 信息（即是哪种 SPL Token）
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(mut)]
+    #[account(mut)] // will change the token account's balance
+    // 公司金库的 token 账户，存放待发放的代币
     pub treasury_token_account: InterfaceAccount<'info, TokenAccount>,
     #[account(
         init_if_needed,
@@ -169,8 +180,13 @@ pub struct ClaimTokens<'info> {
         associated_token::authority = beneficiary,
         associated_token::token_program = token_program
     )]
+    // 员工自己的 token 账户，用于接收领取到的代币。如果不存在会自动创建
     pub employee_token_account: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
+    /*
+    在 Anchor 里，如果你用 associated_token::mint = ... 和 associated_token::authority = ... 
+    这样的语法，Anchor 会自动帮你用这个程序去创建（如果不存在）或查找（如果已存在）这个账户
+     */
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
