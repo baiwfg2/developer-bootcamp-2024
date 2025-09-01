@@ -52,21 +52,21 @@ describe("Lending Smart Contract Tests", async () => {
     wallet: provider.wallet,
   });
 
-  const SOL_PRICE_FEED_ID =
+  const USDC_PRICE_FEED_ID =
     "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a";
 
-  const solUsdPriceFeedAccount = pythSolanaReceiver
-    .getPriceFeedAccountAddress(0, SOL_PRICE_FEED_ID)
+  const usdcUsdPriceFeedAccount = pythSolanaReceiver
+    .getPriceFeedAccountAddress(0, USDC_PRICE_FEED_ID)
     .toBase58();
 
-  const solUsdPriceFeedAccountPubkey = new PublicKey(solUsdPriceFeedAccount);
+  const solUsdPriceFeedAccountPubkey = new PublicKey(usdcUsdPriceFeedAccount);
   const feedAccountInfo = await devnetConnection.getAccountInfo(
     solUsdPriceFeedAccountPubkey
   );
 
   context.setAccount(solUsdPriceFeedAccountPubkey, feedAccountInfo);
 
-  console.log("pricefeed:", solUsdPriceFeedAccount);
+  console.log("pricefeed:", usdcUsdPriceFeedAccount);
 
   console.log("Pyth Account Info:", accountInfo);
 
@@ -220,7 +220,7 @@ describe("Lending Smart Contract Tests", async () => {
         signer: signer.publicKey,
         mint: mintSOL,
         tokenProgram: TOKEN_PROGRAM_ID,
-        priceUpdate: solUsdPriceFeedAccount,
+        priceUpdate: usdcUsdPriceFeedAccount,
       })
       .rpc({ commitment: "confirmed" });
 
