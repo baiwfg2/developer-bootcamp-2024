@@ -15,5 +15,27 @@ url = "https://api.apr.dev"
 cluster = "Localnet"
 wallet = "~/.config/solana/id.json"
 
+[test.validator]
+# https://www.anchor-lang.com/docs/references/anchor-toml#testvalidator
+# # This is the url of the cluster that accounts are cloned from
+# If not given, error: Error: Validator url for Solana's JSON RPC should be provided in order to clone accounts from i
+url = "https://api.devnet.solana.com"
+startup_wait = 30000  # 等待30秒让验证器完全启动(clone时需要延长)
+bind_address = "127.0.0.1"
+ledger = ".anchor/test-ledger"
+rpc_port = 8899
+
+[[test.validator.clone]]
+address = "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE"
+
+# Source: https://docs.pyth.network/price-feeds/price-feeds
+# Clone USDC price feed account
+[[test.validator.clone]]
+address = "Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX"
+
+# Clone SOL price feed account
+[[test.validator.clone]]
+address = "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE"
+
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
