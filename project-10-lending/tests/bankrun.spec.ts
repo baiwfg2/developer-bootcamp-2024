@@ -1,117 +1,105 @@
-import { describe, it } from "node:test";
+// Remove the import since Mocha provides these globally
+// import { describe, it } from "node:test";
+import { config } from "dotenv";
+import * as anchor from "@coral-xyz/anchor";
 import { BN, Program } from "@coral-xyz/anchor";
-import { BankrunProvider } from "anchor-bankrun";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { createAccount, createMint, mintTo } from "spl-token-bankrun";
+import { TOKEN_PROGRAM_ID, createMint, mintTo, createAccount } from "@solana/spl-token";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 
-import { startAnchor, BanksClient, ProgramTestContext } from "solana-bankrun";
-
 import { PublicKey, Keypair, Connection } from "@solana/web3.js";
+
+// Load environment variables
+config();
 
 // @ts-ignore
 import IDL from "../target/idl/lending_protocol.json";
 import { LendingProtocol } from "../target/types/lending_protocol";
-import { BankrunContextWrapper } from "../bankrun-utils/bankrunConnection";
 
 describe("Lending Smart Contract Tests", async () => {
   let signer: Keypair;
   let usdcBankAccount: PublicKey;
   let solBankAccount: PublicKey;
-
+  let mintUSDC: PublicKey;
+  let mintSOL: PublicKey;
+  let solUsdPriceFeedAccount: PublicKey;
+  let usdcUsdPriceFeedAccount: PublicKey;
   let solTokenAccount: PublicKey;
-  let provider: BankrunProvider;
+  let provider: anchor.AnchorProvider;
   let program: Program<LendingProtocol>;
-  let banksClient: BanksClient;
-  let context: ProgramTestContext;
-  let bankrunContextWrapper: BankrunContextWrapper;
 
-  const pyth = new PublicKey("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+  const liquidationThreshold = new BN(0.5);
 
-  const devnetConnection = new Connection("https://api.devnet.solana.com");
-  const accountInfo = await devnetConnection.getAccountInfo(pyth);
+  before(async () => {
+    const pyth = new PublicKey("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+    const devnetConnection = new Connection(process.env.DEVNET_RPC_URL);
+    const accountInfo = await devnetConnection.getAccountInfo(pyth);
 
-  context = await startAnchor(
-    "",
-    [{ name: "lending", programId: new PublicKey(IDL.address) }],
-    [
-      {
-        address: pyth,
-        info: accountInfo,
-      },
-    ]
-  );
-  provider = new BankrunProvider(context);
+    provider = anchor.AnchorProvider.env();
+    anchor.setProvider(provider);
+    program = anchor.workspace.LendingProtocol as Program<LendingProtocol>;
+    console.log("programId:", program.programId.toString(), ", conn:", provider.connection.rpcEndpoint);
+    console.log("pyth conn:", devnetConnection.rpcEndpoint);
 
-  bankrunContextWrapper = new BankrunContextWrapper(context);
+    const pythSolanaReceiver = new PythSolanaReceiver({
+      connection: provider.connection,
+      wallet: provider.wallet as anchor.Wallet,
+    });
 
-  const connection = bankrunContextWrapper.connection.toConnection();
+    // look up in https://docs.pyth.network/price-feeds/price-feeds
+    // price feed acccount: Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX
+    const USDC_PRICE_FEED_ID =
+      "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a";
+    // price feed account: 7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE
+    const SOL_PRICE_FEED_ID = "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 
-  const pythSolanaReceiver = new PythSolanaReceiver({
-    connection,
-    wallet: provider.wallet,
+    /*
+    一个纯计算函数，它：
+    - 不访问区块链
+    - 不读取任何账户数据
+    - 只是根据算法计算出地址
+    所以即使传了本地连接给 PythSolanaReceiver,也能获取到price feed account
+    */
+    solUsdPriceFeedAccount = pythSolanaReceiver.getPriceFeedAccountAddress(
+      0, SOL_PRICE_FEED_ID);
+    usdcUsdPriceFeedAccount = pythSolanaReceiver.getPriceFeedAccountAddress(
+      0, USDC_PRICE_FEED_ID);
+      
+    console.log("sol pricefeed:", solUsdPriceFeedAccount.toBase58());
+    console.log("usdc pricefeed:", usdcUsdPriceFeedAccount.toBase58());
+
+    // const solUsdPriceFeedAccountPubkey = new PublicKey(solUsdPriceFeedAccount);
+    const solFeedAccountInfo = await devnetConnection.getAccountInfo(solUsdPriceFeedAccount);
+
+    console.log("Pyth Account Info:", accountInfo);
+    console.log("sol feed account info:", solFeedAccountInfo);
+
+    program = new Program<LendingProtocol>(IDL as LendingProtocol, provider);
+
+    signer = provider.wallet.payer;
+
+    // create token type
+    mintUSDC = await createMint(provider.connection, signer, signer.publicKey,
+      null, 9
+    );
+
+    mintSOL = await createMint(provider.connection, signer,
+      signer.publicKey, null, 9
+    );
+
+    [usdcBankAccount] = PublicKey.findProgramAddressSync(
+      [Buffer.from("treasury"), mintUSDC.toBuffer()],
+      program.programId
+    );
+
+    [solBankAccount] = PublicKey.findProgramAddressSync(
+      [Buffer.from("treasury"), mintSOL.toBuffer()],
+      program.programId
+    );
+
+    console.log("USDC Bank Account", usdcBankAccount.toBase58());
+    console.log("SOL Bank Account", solBankAccount.toBase58());
   });
 
-  const USDC_PRICE_FEED_ID =
-    "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a";
-
-  const usdcUsdPriceFeedAccount = pythSolanaReceiver
-    .getPriceFeedAccountAddress(0, USDC_PRICE_FEED_ID)
-    .toBase58();
-
-  const solUsdPriceFeedAccountPubkey = new PublicKey(usdcUsdPriceFeedAccount);
-  const feedAccountInfo = await devnetConnection.getAccountInfo(
-    solUsdPriceFeedAccountPubkey
-  );
-
-  context.setAccount(solUsdPriceFeedAccountPubkey, feedAccountInfo);
-
-  console.log("pricefeed:", usdcUsdPriceFeedAccount);
-
-  console.log("Pyth Account Info:", accountInfo);
-
-  program = new Program<LendingProtocol>(IDL as LendingProtocol, provider);
-
-  banksClient = context.banksClient;
-
-  signer = provider.wallet.payer;
-
-  const mintUSDC = await createMint(
-    // @ts-ignore
-    banksClient,
-    signer,
-    signer.publicKey,
-    null,
-    2
-  );
-
-  const mintSOL = await createMint(
-    // @ts-ignore
-    banksClient,
-    signer,
-    signer.publicKey,
-    null,
-    2
-  );
-
-  [usdcBankAccount] = PublicKey.findProgramAddressSync(
-    [Buffer.from("treasury"), mintUSDC.toBuffer()],
-    program.programId
-  );
-
-  [solBankAccount] = PublicKey.findProgramAddressSync(
-    [Buffer.from("treasury"), mintSOL.toBuffer()],
-    program.programId
-  );
-
-  [solTokenAccount] = PublicKey.findProgramAddressSync(
-    [Buffer.from("treasury"), mintSOL.toBuffer()],
-    program.programId
-  );
-
-  console.log("USDC Bank Account", usdcBankAccount.toBase58());
-
-  console.log("SOL Bank Account", solBankAccount.toBase58());
   it("Test Init User", async () => {
     const initUserTx = await program.methods
       .initUser(mintUSDC)
@@ -137,8 +125,7 @@ describe("Lending Smart Contract Tests", async () => {
 
     const amount = 10_000 * 10 ** 9;
     const mintTx = await mintTo(
-      // @ts-ignores
-      banksClient,
+      provider.connection,
       signer,
       mintUSDC,
       usdcBankAccount,
@@ -163,8 +150,7 @@ describe("Lending Smart Contract Tests", async () => {
 
     const amount = 10_000 * 10 ** 9;
     const mintSOLTx = await mintTo(
-      // @ts-ignores
-      banksClient,
+      provider.connection,
       signer,
       mintSOL,
       solBankAccount,
@@ -177,8 +163,7 @@ describe("Lending Smart Contract Tests", async () => {
 
   it("Create and Fund Token Account", async () => {
     const USDCTokenAccount = await createAccount(
-      // @ts-ignores
-      banksClient,
+      provider.connection,
       signer,
       mintUSDC,
       signer.publicKey
@@ -188,8 +173,7 @@ describe("Lending Smart Contract Tests", async () => {
 
     const amount = 10_000 * 10 ** 9;
     const mintUSDCTx = await mintTo(
-      // @ts-ignores
-      banksClient,
+      provider.connection,
       signer,
       mintUSDC,
       USDCTokenAccount,
@@ -200,7 +184,7 @@ describe("Lending Smart Contract Tests", async () => {
     console.log("Mint to USDC Bank Signature:", mintUSDCTx);
   });
 
-  it("Test Deposit", async () => {
+  it("Test Deposit USDC", async () => {
     const depositUSDC = await program.methods
       .deposit(new BN(100000000000))
       .accounts({
@@ -213,7 +197,7 @@ describe("Lending Smart Contract Tests", async () => {
     console.log("Deposit USDC", depositUSDC);
   });
 
-  it("Test Borrow", async () => {
+  it("Test Borrow SOL", async () => {
     const borrowSOL = await program.methods
       .borrow(new BN(1))
       .accounts({
@@ -227,7 +211,7 @@ describe("Lending Smart Contract Tests", async () => {
     console.log("Borrow SOL", borrowSOL);
   });
 
-  it("Test Repay", async () => {
+  it("Test Repay SOL", async () => {
     const repaySOL = await program.methods
       .repay(new BN(1))
       .accounts({
